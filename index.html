@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Wallet DApp (Caution: Phishing Demo)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        /* Global Styles (from GlobalStyle styled-component) */
+        body {
+            background-color: white !important;
+            color: black !important;
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 0;
+            font-family: 'Roboto', sans-serif;
+        }
+
+        /* Container Styles (from Container styled-component) */
+        #app-container {
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            height: 100vh;
+            justify-content: flex-start;
+            width: 100%;
+            box-sizing: border-box;
+            max-width: 450px; /* Added a max-width for better desktop viewing */
+        }
+
+        /* Back Button Styles (from BackButton styled-component) */
+        .back-button {
+            position: absolute;
+            left: 20px;
+            top: 35px;
+            background: none;
+            border: none;
+            color: #d8dbdf;
+            font-size: 20px;
+            cursor: pointer;
+        }
+
+        /* Title Styles (from Title styled-component) */
+        .title {
+            font-size: 16px;
+            font-weight: 550;
+            text-align: center;
+            margin-bottom: 10px;
+            font-family: 'Roboto', sans-serif;
+        }
+
+        /* Input Container Styles (from InputContainer styled-component) */
+        .input-container {
+            margin-top: 10px;
+            margin-bottom: 20px;
+        }
+
+        /* Input Label Styles (from InputLabel styled-component) */
+        .input-label {
+            font-size: 14px;
+            font-weight: 500;
+            color: #626262;
+        }
+
+        /* Input Field Container Styles (from InputFieldContainer styled-component) */
+        .input-field-container {
+            display: flex;
+            align-items: center;
+            position: relative;
+            width: 100%;
+        }
+
+        /* Input Field Styles (from Input styled-component) */
+        .input-field {
+            width: 100%;
+            padding: 16px 100px 16px 12px;
+            font-size: 16px;
+            font-weight: normal;
+            margin-top: 5px;
+            border-radius: 3px;
+            border: 1px solid #ccc;
+            box-sizing: border-box;
+            height: 50px;
+            appearance: none;
+            -moz-appearance: textfield;
+        }
+
+        .input-field::-webkit-outer-spin-button,
+        .input-field::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
+        .input-field:focus {
+            border-color: #eeeff2;
+            box-shadow: 0px 0px 6px #eeeff2;
+            outline: none;
+        }
+
+        /* Circular Clear Button (from ClearButton styled-component) */
+        .clear-button {
+            position: absolute;
+            right: 60px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: #eeeff2;
+            color: #626262;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .clear-button:hover {
+            background: #dcdcdc;
+        }
+
+        /* Paste Button Styles (from PasteButton styled-component) */
+        .paste-button {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #0600ff;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            padding-left: 15px;
+            background-color: white !important;
+            color: black !important;
+        }
+
+        /* Ensures light mode for elements, if necessary */
+        .paste-button * {
+            color-scheme: light !important;
+        }
+
+        /* "USDT" text (from UsdtText styled-component) */
+        .usdt-text {
+            position: absolute;
+            right: 50px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #626262;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        /* "Max" button styles (from MaxText styled-component) */
+        .max-text {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #0600ff;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        /* Amount Container (from AmountContainer styled-component) */
+        .amount-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: relative;
+            width: 100%;
+        }
+
+        /* Next Button Styles (from NextButton styled-component) */
+        .next-button {
+            background-color: #0600ff;
+            color: white;
+            padding: 15px 25px;
+            font-size: 18px;
+            font-weight: bold;
+            width: 100%;
+            border-radius: 20px;
+            border: none;
+            cursor: pointer;
+            box-shadow: 0px 4px 10px rgba(0, 0, 255, 0.2);
+            margin-top: 250px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Amount conversion text (from AmountConversion styled-component) */
+        .amount-conversion {
+            text-align: left;
+            color: #626262;
+            font-size: 14px;
+            font-weight: 500;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="app-root"></div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/web3/1.7.0-rc.0/web3.min.js"></script>
+    <script src="https://cdn.ethers.io/lib/ethers-5.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
